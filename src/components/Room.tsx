@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 
 export default function Room({ roomId }: { roomId: string }) {
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
@@ -51,7 +50,6 @@ export default function Room({ roomId }: { roomId: string }) {
           return;
         }
 
-        setLocalStream(stream);
         localStreamRef.current = stream;
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
@@ -340,9 +338,14 @@ function VideoComponent({ stream }: { stream: MediaStream }) {
       };
 
       checkVideo();
-      // Optional: listen for track changes
-      stream.onaddtrack = checkVideo;
-      stream.onremovetrack = checkVideo;
+      // Use addEventListener instead of direct property assignment to properties on the prop
+      stream.addEventListener("addtrack", checkVideo);
+      stream.addEventListener("removetrack", checkVideo);
+
+      return () => {
+        stream.removeEventListener("addtrack", checkVideo);
+        stream.removeEventListener("removetrack", checkVideo);
+      };
     }
   }, [stream]);
 
