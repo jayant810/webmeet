@@ -8,21 +8,69 @@ const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const app = next({ dev, hostname, port });
 const handler = app.getRequestHandler();
 
+// In-memory store for meeting admins and waiting users
+// In production, consider using Redis
+const rooms = new Map(); 
+
 app.prepare().then(() => {
   const httpServer = createServer(handler);
-
   const io = new Server(httpServer);
 
   io.on("connection", (socket) => {
-    console.log("A user connected:", socket.id);
-
-    socket.on("join-room", (roomId, userId) => {
-      socket.join(roomId);
-      socket.to(roomId).emit("user-connected", userId);
+    socket.on("join-room", (roomId, userId, userName, isAdmin = false) => {
+      if (!rooms.has(roomId)) {
+        rooms.set(roomId, { adminId: null, waitingUsers: new Map() });
+      }
+      
+      const room = rooms.get(roomId);
+      
+      if (isAdmin) {
+        room.adminId = socket.id;
+        socket.join(roomId);
+        socket.to(roomId).emit("user-connected", userId, userName);
+        
+        // Notify admin about users already waiting
+        if (room.waitingUsers.size > 0) {
+          socket.emit("waiting-list", Array.from(room.waitingUsers.values()));
+        }
+      } else {
+        // If no admin is present, or user is not admin, put them in waiting room
+        room.waitingUsers.set(userId, { socketId: socket.id, userId, userName });
+        
+        if (room.adminId) {
+          io.to(room.adminId).emit("request-to-join", { userId, userName });
+        } else {
+          socket.emit("waiting-for-admin");
+        }
+      }
 
       socket.on("disconnect", () => {
+        if (socket.id === room?.adminId) {
+           room.adminId = null;
+        }
         socket.to(roomId).emit("user-disconnected", userId);
+        room?.waitingUsers.delete(userId);
       });
+    });
+
+    socket.on("approve-user", (roomId, userId) => {
+      const room = rooms.get(roomId);
+      const user = room?.waitingUsers.get(userId);
+      
+      if (user) {
+        io.to(user.socketId).emit("join-approved");
+        room.waitingUsers.delete(userId);
+      }
+    });
+
+    socket.on("reject-user", (roomId, userId) => {
+      const room = rooms.get(roomId);
+      const user = room?.waitingUsers.get(userId);
+      
+      if (user) {
+        io.to(user.socketId).emit("join-rejected");
+        room.waitingUsers.delete(userId);
+      }
     });
 
     socket.on("offer", (payload) => {
@@ -37,7 +85,6 @@ app.prepare().then(() => {
       io.to(incoming.target).emit("ice-candidate", incoming);
     });
 
-    // Handle user muting/unmuting or turning off camera
     socket.on("toggle-media", (roomId, userId, type, state) => {
        socket.to(roomId).emit("user-toggled-media", userId, type, state);
     });

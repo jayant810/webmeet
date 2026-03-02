@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { Video, Keyboard, Link as LinkIcon, Plus, Copy, Check } from "lucide-react";
+import { Video, Keyboard, Link as LinkIcon, Plus, Copy, Check, LogOut } from "lucide-react";    
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,24 +20,46 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { useSession, signOut } from "next-auth/react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 export default function Home() {
+  const { data: session, status } = useSession();
   const router = useRouter();
   const [roomCode, setRoomCode] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [generatedLink, setGeneratedLink] = useState("");
   const [copied, setCopied] = useState(false);
 
-  const startInstantMeeting = () => {
-    const roomId = uuidv4();
-    router.push(`/room/${roomId}`);
-  };
+  if (status === "loading") return <div className="h-screen flex items-center justify-center">Loading...</div>;
+  if (!session) {
+    router.push("/login");
+    return null;
+  }
 
-  const createMeetingForLater = () => {
+  const createMeeting = async (isInstant = true) => {
     const roomId = uuidv4();
-    const link = `${window.location.origin}/room/${roomId}`;
-    setGeneratedLink(link);
-    setIsDialogOpen(true);
+    try {
+      // Create meeting in database via an API route (we'll create this next)
+      const res = await fetch("/api/meetings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId }),
+      });
+
+      if (!res.ok) throw new Error("Failed to create meeting");
+
+      if (isInstant) {
+        router.push(`/room/${roomId}`);
+      } else {
+        const link = `${window.location.origin}/room/${roomId}`;
+        setGeneratedLink(link);
+        setIsDialogOpen(true);
+      }
+    } catch (error) {
+      toast.error("Error creating meeting");
+      console.error(error);
+    }
   };
 
   const copyToClipboard = async () => {
@@ -60,74 +82,99 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-white text-slate-900">
-      <header className="p-4 flex items-center justify-between border-b">
+    <div className="min-h-screen bg-white flex flex-col">
+      <header className="px-6 py-4 flex items-center justify-between border-b">
         <div className="flex items-center gap-2">
-          <div className="bg-blue-600 p-2 rounded-lg">
+          <div className="bg-blue-600 p-1.5 rounded-lg">
             <Video className="w-6 h-6 text-white" />
           </div>
-          <span className="text-xl font-semibold tracking-tight text-slate-800">WebMeet</span>
+          <span className="text-xl font-semibold text-gray-700">WebMeet</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="text-right hidden sm:block">
+            <p className="text-sm font-medium">{session.user?.name}</p>
+            <p className="text-xs text-gray-500">{session.user?.email}</p>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Avatar className="cursor-pointer border">
+                <AvatarImage src={session.user?.image || ""} />
+                <AvatarFallback>{session.user?.name?.charAt(0)}</AvatarFallback>
+              </Avatar>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => signOut()} className="text-red-600 cursor-pointer">
+                <LogOut className="w-4 h-4 mr-2" />
+                Sign Out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-6 text-center lg:flex-row lg:text-left lg:gap-20">
-        <div className="max-w-xl">
-          <h1 className="text-4xl sm:text-5xl font-normal text-slate-900 mb-6 tracking-tight">
-            Premium video meetings. Now free for everyone.
-          </h1>
-          <p className="text-lg text-slate-600 mb-10">
-            We re-engineered the service we built for secure business meetings, WebMeet, to make it free and available for all.
-          </p>
+      <main className="flex-1 flex flex-col items-center justify-center px-6 -mt-10">
+        <div className="max-w-4xl w-full grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          <div>
+            <h1 className="text-4xl md:text-5xl font-medium text-gray-800 mb-4 leading-tight">
+              Video meetings for everyone.
+            </h1>
+            <p className="text-lg text-gray-500 mb-8">
+              Connect, collaborate, and celebrate from anywhere with WebMeet.
+            </p>
 
-          <div className="flex flex-col sm:flex-row items-center gap-4">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="lg" className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white rounded-md h-12 px-6">
-                  <Video className="w-5 h-5 mr-2" />
-                  New meeting
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuItem onClick={createMeetingForLater} className="py-3 cursor-pointer">
-                  <LinkIcon className="w-4 h-4 mr-2" />
-                  Create a meeting for later
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={startInstantMeeting} className="py-3 cursor-pointer">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Start an instant meeting
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            
-            <form onSubmit={joinMeeting} className="flex w-full sm:w-auto items-center gap-2">
-              <div className="relative flex-1 sm:w-64">
-                <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                  <Keyboard className="w-5 h-5 text-slate-500" />
+            <div className="flex flex-col sm:flex-row items-center gap-4">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="lg" className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white rounded-md h-12 px-6">
+                    <Video className="w-5 h-5 mr-2" />
+                    New meeting
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuItem onClick={() => createMeeting(false)} className="py-3 cursor-pointer">
+                    <LinkIcon className="w-4 h-4 mr-2" />
+                    Create a meeting for later
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => createMeeting(true)} className="py-3 cursor-pointer">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Start an instant meeting
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <form onSubmit={joinMeeting} className="flex w-full sm:w-auto items-center gap-2">
+                <div className="relative flex-1 sm:w-64">
+                  <Keyboard className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <Input 
+                    placeholder="Enter a code or link" 
+                    className="pl-10 h-12 border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-md"
+                    value={roomCode}
+                    onChange={(e) => setRoomCode(e.target.value)}
+                  />
                 </div>
-                <Input
-                  type="text"
-                  placeholder="Enter a code or link"
-                  className="pl-10 h-12 rounded-md"
-                  value={roomCode}
-                  onChange={(e) => setRoomCode(e.target.value)}
-                />
-              </div>
-              <Button type="submit" variant="ghost" className="h-12 px-4 text-slate-600 hover:text-blue-600" disabled={!roomCode.trim()}>
-                Join
-              </Button>
-            </form>
+                <Button 
+                  type="submit"
+                  variant="ghost" 
+                  disabled={!roomCode.trim()}
+                  className="text-blue-600 font-medium hover:bg-blue-50 h-12 px-4"
+                >
+                  Join
+                </Button>
+              </form>
+            </div>
+
+            <div className="mt-8 pt-8 border-t border-gray-100">
+              <p className="text-sm text-gray-500">
+                <span className="text-blue-600 cursor-pointer hover:underline">Learn more</span> about WebMeet
+              </p>
+            </div>
           </div>
           
-          <div className="mt-8 border-t pt-6 text-sm text-slate-500">
-            <a href="#" className="text-blue-600 hover:underline">Learn more</a> about WebMeet.
-          </div>
-        </div>
-
-        <div className="hidden lg:block">
-          <div className="relative w-80 h-80 rounded-full border border-slate-200 flex items-center justify-center bg-slate-50 overflow-hidden shadow-sm">
-             <div className="flex flex-col items-center space-y-4 text-slate-400">
-               <Video className="w-16 h-16" />
-               <span className="text-sm font-medium">Get a link you can share</span>
+          <div className="hidden lg:flex justify-center">
+             <div className="relative w-80 h-80 rounded-full bg-blue-50 flex items-center justify-center">
+                <div className="w-64 h-64 rounded-full bg-blue-100 flex items-center justify-center">
+                  <Video className="w-32 h-32 text-blue-600 opacity-80" />
+                </div>
              </div>
           </div>
         </div>

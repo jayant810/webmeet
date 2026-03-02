@@ -1,71 +1,54 @@
-# WebMeet - Digital Meeting Website
+# WebMeet - Project Status & Architecture
 
-A modern, "Google Meet" style video conferencing application built from scratch using Next.js, WebRTC, and Socket.IO. This project is designed to be resume-ready, demonstrating full-stack capabilities, real-time signaling, and peer-to-peer media streaming.
+## 🚀 Current Architecture (Hybrid Deployment)
+The project has been refactored for high-scale performance (15-20+ users) by splitting the concerns:
+- **Frontend:** Next.js 15+ (App Router) deployed on **Vercel**.
+- **Database:** PostgreSQL hosted on **Neon.tech**.
+- **Signaling Server (Backend):** Standalone Socket.IO server (`server-standalone.mjs`) deployed on **AWS EC2 (Ubuntu)**.
+- **Reverse Proxy:** Nginx on AWS with **SSL (Certbot)** to allow secure `wss://` connections from Vercel's `https://` environment.
 
-## 🚀 Tech Stack
+## ✨ Features Implemented
+- [x] **Google OAuth Authentication:** Integrated via NextAuth.js.
+- [x] **Persistent Meetings:** Meeting IDs and Admin ownership stored in PostgreSQL (Prisma).
+- [x] **Admin Roles:** The creator of the meeting has special privileges (Shield icon in UI).
+- [x] **Waiting Room:** Non-admin users must be "Approved" by the Admin to join.
+- [x] **Screen Sharing:** Real-time screen capture using `getDisplayMedia` and track replacement.
+- [x] **Dynamic Grid:** Responsive layout that scales based on participant count.
 
-- **Framework:** [Next.js 15+](https://nextjs.org/) (App Router)
-- **Language:** [TypeScript](https://www.typescriptlang.org/)
-- **Real-time Signaling:** [Socket.IO](https://socket.io/) (Custom Node.js server)
-- **Media Streaming:** [WebRTC](https://webrtc.org/) (Mesh Architecture)
-- **Styling:** [Tailwind CSS](https://tailwindcss.com/)
-- **UI Components:** [shadcn/ui](https://ui.shadcn.com/)
-- **Icons:** [Lucide React](https://lucide.dev/)
+## 🛠️ Deployment Instructions
 
-## ✨ Features
+### 1. AWS Signaling Server (Ubuntu)
+- **File:** `server-standalone.mjs`
+- **Port:** `3001` (proxied by Nginx to `443`)
+- **Setup:**
+  ```bash
+  npm install socket.io dotenv
+  pm2 start server-standalone.mjs --name webmeet-signaling
+  ```
+- **Nginx Path:** `/etc/nginx/sites-available/webmeet` (See Chat History for config).
 
-- **P2P Video/Audio:** Built-in WebRTC mesh network allowing 5-10 users to connect directly.
-- **Dynamic Room Generation:** Unique UUID-based meeting rooms.
-- **Real-time Controls:**
-  - Toggle Camera (Video on/off)
-  - Toggle Microphone (Mute/Unmute)
-  - Leave Meeting
-- **Responsive Grid:** Adaptive video layout that scales based on the number of participants.
-- **Modern UI:** Clean, minimalist design inspired by Google Meet.
+### 2. Vercel Frontend
+- **Framework:** Next.js
+- **Required Environment Variables:**
+  - `DATABASE_URL`: Neon.tech connection string.
+  - `NEXTAUTH_SECRET`: Random string for session encryption.
+  - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: From Google Cloud Console.
+  - `NEXT_PUBLIC_SIGNALING_SERVER`: `https://your-aws-domain.com`
 
-## 🏗️ Architecture
+### 3. Database (Prisma)
+- **Sync Schema:** `npx prisma db push`
 
-Instead of using third-party SDKs like LiveKit or Agora, this project implements the **WebRTC Signaling Flow** from scratch:
-1. **Signaling Server:** A custom `server.mjs` integrates Socket.IO with the Next.js request handler.
-2. **Handshake:** When a user joins, the server facilitates the exchange of SDP (Session Description Protocol) offers and answers.
-3. **ICE Candidates:** Peers exchange network information via the signaling server to establish a direct P2P connection through STUN servers.
-4. **Mesh Network:** Each participant maintains a direct connection to every other participant, ideal for small groups (5-10 people).
+## 📂 Key Files
+- `server-standalone.mjs`: The dedicated signaling logic for AWS.
+- `src/components/Room.tsx`: Core WebRTC, Screen Sharing, and Admin UI.
+- `src/app/api/auth/[...nextauth]/route.ts`: Google Auth configuration.
+- `prisma/schema.prisma`: Database models for Users and Meetings.
 
-## 🛠️ Getting Started
+## 📝 Pending / Next Steps
+- [ ] **Chat System:** Implement real-time text chat using the existing Socket.IO bridge.
+- [ ] **Participant List:** Sidebar to view and manage all users in the call.
+- [ ] **Recording:** Integration with AWS S3 or MediaConvert for meeting recording.
+- [ ] **TURN Server:** Set up Coturn on AWS for users behind strict corporate firewalls.
 
-### Prerequisites
-- Node.js (Latest LTS recommended)
-- npm
-
-### Installation
-1. Clone or navigate to the project folder:
-   ```bash
-   cd webmeet
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-### Running the App
-Since we use a custom server for signaling, use the following command instead of `next dev`:
-
-```bash
-npm run dev
-```
-
-The app will be available at `http://localhost:3000`.
-
-## 📂 Project Structure
-
-- `server.mjs`: Custom Node.js server handling Next.js rendering and Socket.IO signaling.
-- `src/app/page.tsx`: Landing page for creating or joining meetings.
-- `src/app/room/[id]/page.tsx`: Dynamic route for meeting rooms.
-- `src/components/Room.tsx`: The core WebRTC logic and video layout engine.
-- `src/components/ui/`: Reusable UI components from shadcn/ui.
-
-## 📝 Future Roadmap
-- [ ] Screen sharing support.
-- [ ] Real-time text chat using Socket.IO.
-- [ ] Participant list and "Raise Hand" feature.
-- [ ] Virtual backgrounds/Blur (using MediaPipe).
+---
+*Last Updated: March 2, 2026*
