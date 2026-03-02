@@ -20,7 +20,7 @@ const io = new Server(httpServer, {
   }
 });
 
-const rooms = new Map(); 
+const rooms = new Map(); // Map of roomId -> { adminId, waitingUsers: Map, participants: Map }
 
 io.on("connection", (socket) => {
   console.log(`[${new Date().toISOString()}] User connected: ${socket.id}`);
@@ -29,13 +29,14 @@ io.on("connection", (socket) => {
     console.log(`[${new Date().toISOString()}] User ${userName} (${userId}) joining room: ${roomId} (Admin: ${isAdmin})`);
     
     if (!rooms.has(roomId)) {
-      rooms.set(roomId, { adminId: null, waitingUsers: new Map() });
+      rooms.set(roomId, { adminId: null, waitingUsers: new Map(), participants: new Map() });
     }
     
     const room = rooms.get(roomId);
     
     if (isAdmin) {
       room.adminId = socket.id;
+      room.participants.set(userId, { socketId: socket.id, userName });
       socket.join(roomId);
       console.log(`[${new Date().toISOString()}] Admin ${userName} joined and is ready.`);
       
@@ -63,14 +64,30 @@ io.on("connection", (socket) => {
       if (socket.id === room?.adminId) room.adminId = null;
       socket.to(roomId).emit("user-disconnected", userId);
       room?.waitingUsers.delete(userId);
+      room?.participants.delete(userId);
     });
   });
 
   socket.on("ready-to-connect", (roomId, userId, userName) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
     console.log(`[${new Date().toISOString()}] User ${userName} (${userId}) is approved and joining room: ${roomId}`);
     socket.join(roomId);
-    // Broadcast to everyone ELSE in the room to start WebRTC
+    
+    // 1. Add to active participants
+    room.participants.set(userId, { socketId: socket.id, userName });
+
+    // 2. Notify OTHERS that this user is now ready to receive offers
     socket.to(roomId).emit("user-connected", userId, userName);
+    
+    // 3. Notify THIS user about EVERYONE else already in the room
+    // so they can initiate connections to the admin and other participants
+    room.participants.forEach((data, otherUserId) => {
+      if (otherUserId !== userId) {
+        socket.emit("user-connected", otherUserId, data.userName);
+      }
+    });
   });
 
   socket.on("approve-user", (roomId, userId) => {
