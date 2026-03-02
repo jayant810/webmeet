@@ -131,26 +131,30 @@ export default function Room({ roomId }: { roomId: string }) {
         console.log("User connected:", userName);
         setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
         
-        // Use local stream if available, otherwise join without sending media
-        const pc = createPeerConnection(userId, localStreamRef.current || new MediaStream(), socket);
-        peersRef.current[userId] = pc;
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
-        } catch (e) { console.error(e); }
+        // ONLY create connection if we have a stream to send
+        if (localStreamRef.current) {
+          const pc = createPeerConnection(userId, localStreamRef.current, socket);
+          peersRef.current[userId] = pc;
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
+          } catch (e) { console.error(e); }
+        }
       });
 
       socket.on("offer", async (payload) => {
         console.log("Received offer from:", payload.caller);
-        const pc = createPeerConnection(payload.caller, localStreamRef.current || new MediaStream(), socket);
-        peersRef.current[payload.caller] = pc;
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit("answer", { target: payload.caller, caller: socket.id, sdp: answer });
-        } catch (e) { console.error(e); }
+        if (localStreamRef.current) {
+          const pc = createPeerConnection(payload.caller, localStreamRef.current, socket);
+          peersRef.current[payload.caller] = pc;
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit("answer", { target: payload.caller, caller: socket.id, sdp: answer });
+          } catch (e) { console.error(e); }
+        }
       });
 
       socket.on("answer", async (payload) => {
