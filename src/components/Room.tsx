@@ -15,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -32,7 +31,7 @@ interface WaitingUser {
 }
 
 export default function Room({ roomId }: { roomId: string }) {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [remoteUserNames, setRemoteUserNames] = useState<Record<string, string>>({});
   const [isMuted, setIsMuted] = useState(false);
@@ -63,7 +62,12 @@ export default function Room({ roomId }: { roomId: string }) {
   };
 
   useEffect(() => {
-    if (!session) return;
+    if (status === "unauthenticated") {
+      router.push(`/login?callbackUrl=/room/${roomId}`);
+      return;
+    }
+
+    if (status !== "authenticated" || !session) return;
 
     let isMounted = true;
     const signalingServer = process.env.NEXT_PUBLIC_SIGNALING_SERVER || window.location.origin;
@@ -73,18 +77,23 @@ export default function Room({ roomId }: { roomId: string }) {
     });
     socketRef.current = socket;
 
-    // Check if user is the admin (owner) of the room
-    const checkAdminStatus = async () => {
-       try {
-         const res = await fetch(`/api/meetings/${roomId}`);
-         const data = await res.json();
-         const isUserAdmin = data.adminId === (session?.user as any).id;
-         setIsAdmin(isUserAdmin);
-         startMeeting(isUserAdmin);
-       } catch (e) {
-         console.error("Error checking admin status", e);
-         startMeeting(false);
-       }
+    const createPeerConnection = (userId: string, stream: MediaStream, socket: Socket) => {
+      const pc = new RTCPeerConnection(iceServers);
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("ice-candidate", { target: userId, caller: socket.id, candidate: event.candidate });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          setRemoteStreams(prev => ({ ...prev, [userId]: event.streams[0] }));
+        }
+      };
+
+      return pc;
     };
 
     const startMeeting = (adminStatus: boolean) => {
@@ -117,7 +126,6 @@ export default function Room({ roomId }: { roomId: string }) {
         console.log("User connected:", userName);
         setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
         
-        // If we have our own stream, start the handshake
         if (localStreamRef.current) {
           const pc = createPeerConnection(userId, localStreamRef.current, socket);
           peersRef.current[userId] = pc;
@@ -131,7 +139,6 @@ export default function Room({ roomId }: { roomId: string }) {
 
       socket.on("offer", async (payload) => {
         console.log("Received offer from:", payload.caller);
-        // Wait for stream if it's not ready yet
         const pc = createPeerConnection(payload.caller, localStreamRef.current || new MediaStream(), socket);
         peersRef.current[payload.caller] = pc;
         try {
@@ -181,9 +188,6 @@ export default function Room({ roomId }: { roomId: string }) {
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = stream;
           }
-
-          // If we joined and others were already offering, we might need to renegotiate 
-          // but usually, simple offer/answer is fine if listeners were ready.
         })
         .catch((err) => {
           console.error("Media access error:", err);
@@ -192,6 +196,20 @@ export default function Room({ roomId }: { roomId: string }) {
 
       // 3. Emit join-room
       socket.emit("join-room", roomId, (session?.user as any).id, session?.user?.name, adminStatus);
+    };
+
+    // Check if user is the admin (owner) of the room
+    const checkAdminStatus = async () => {
+       try {
+         const res = await fetch(`/api/meetings/${roomId}`);
+         const data = await res.json();
+         const isUserAdmin = data.adminId === (session?.user as any).id;
+         setIsAdmin(isUserAdmin);
+         startMeeting(isUserAdmin);
+       } catch (e) {
+         console.error("Error checking admin status", e);
+         startMeeting(false);
+       }
     };
 
     checkAdminStatus();
@@ -203,26 +221,7 @@ export default function Room({ roomId }: { roomId: string }) {
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
       Object.values(peersRef.current).forEach(pc => pc.close());
     };
-  }, [roomId, session]);
-
-  const createPeerConnection = (userId: string, stream: MediaStream, socket: Socket) => {
-    const pc = new RTCPeerConnection(iceServers);
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit("ice-candidate", { target: userId, caller: socket.id, candidate: event.candidate });
-      }
-    };
-
-    pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        setRemoteStreams(prev => ({ ...prev, [userId]: event.streams[0] }));
-      }
-    };
-
-    return pc;
-  };
+  }, [roomId, session, status, router]);
 
   const toggleMute = () => {
     const audioTrack = localStreamRef.current?.getAudioTracks()[0];
@@ -249,13 +248,11 @@ export default function Room({ roomId }: { roomId: string }) {
 
         const videoTrack = stream.getVideoTracks()[0];
         
-        // Replace track for all peers
         Object.values(peersRef.current).forEach(pc => {
           const sender = pc.getSenders().find(s => s.track?.kind === "video");
           if (sender) sender.replaceTrack(videoTrack);
         });
 
-        // Update local preview
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
         videoTrack.onended = () => stopScreenShare();
@@ -295,6 +292,10 @@ export default function Room({ roomId }: { roomId: string }) {
     localStreamRef.current?.getTracks().forEach(t => t.stop());
     router.push("/");
   };
+
+  if (status === "loading") {
+    return <div className="h-screen flex items-center justify-center bg-neutral-900 text-white">Loading session...</div>;
+  }
 
   if (isRejected) {
     return (
