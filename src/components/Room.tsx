@@ -126,15 +126,14 @@ export default function Room({ roomId }: { roomId: string }) {
         console.log("User connected:", userName);
         setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
         
-        if (localStreamRef.current) {
-          const pc = createPeerConnection(userId, localStreamRef.current, socket);
-          peersRef.current[userId] = pc;
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
-          } catch (e) { console.error(e); }
-        }
+        // Use local stream if available, otherwise join without sending media
+        const pc = createPeerConnection(userId, localStreamRef.current || new MediaStream(), socket);
+        peersRef.current[userId] = pc;
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
+        } catch (e) { console.error(e); }
       });
 
       socket.on("offer", async (payload) => {
