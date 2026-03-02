@@ -187,7 +187,9 @@ export default function Room({ roomId }: { roomId: string }) {
           setError("Camera blocked or in use. You can still join.");
         });
 
-      socket.emit("join-room", roomId, (session.user as any).id, session.user.name, adminStatus);
+      if (session?.user) {
+        socket.emit("join-room", roomId, (session.user as any).id, session.user.name, adminStatus);
+      }
     };
 
     const checkAdminStatus = async () => {
