@@ -88,6 +88,87 @@ export default function Room({ roomId }: { roomId: string }) {
     };
 
     const startMeeting = (adminStatus: boolean) => {
+      // 1. Set up listeners IMMEDIATELY (before getUserMedia)
+      socket.on("connect", () => setIsConnected(true));
+      
+      socket.on("waiting-for-admin", () => setIsWaiting(true));
+      
+      socket.on("join-approved", () => {
+        console.log("Join approved, notifying room...");
+        setIsWaiting(false);
+        socket.emit("ready-to-connect", roomId, (session?.user as any).id, session?.user?.name);
+      });
+
+      socket.on("join-rejected", () => {
+        setIsWaiting(false);
+        setIsRejected(true);
+      });
+
+      socket.on("request-to-join", (user: WaitingUser) => {
+        setWaitingUsers((prev) => {
+          if (prev.find(u => u.userId === user.userId)) return prev;
+          return [...prev, user];
+        });
+        toast.info(`${user.userName} wants to join`);
+      });
+
+      // Handle incoming connections and WebRTC signaling
+      socket.on("user-connected", async (userId: string, userName: string) => {
+        console.log("User connected:", userName);
+        setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
+        
+        // If we have our own stream, start the handshake
+        if (localStreamRef.current) {
+          const pc = createPeerConnection(userId, localStreamRef.current, socket);
+          peersRef.current[userId] = pc;
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
+          } catch (e) { console.error(e); }
+        }
+      });
+
+      socket.on("offer", async (payload) => {
+        console.log("Received offer from:", payload.caller);
+        // Wait for stream if it's not ready yet
+        const pc = createPeerConnection(payload.caller, localStreamRef.current || new MediaStream(), socket);
+        peersRef.current[payload.caller] = pc;
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit("answer", { target: payload.caller, caller: socket.id, sdp: answer });
+        } catch (e) { console.error(e); }
+      });
+
+      socket.on("answer", async (payload) => {
+        const pc = peersRef.current[payload.caller];
+        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+      });
+
+      socket.on("ice-candidate", async (incoming) => {
+        const pc = peersRef.current[incoming.caller];
+        if (pc && pc.remoteDescription) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(incoming.candidate));
+          } catch (e) { console.error("Error adding ICE candidate", e); }
+        }
+      });
+
+      socket.on("user-disconnected", (userId: string) => {
+        if (peersRef.current[userId]) {
+          peersRef.current[userId].close();
+          delete peersRef.current[userId];
+        }
+        setRemoteStreams((prev) => {
+          const next = { ...prev };
+          delete next[userId];
+          return next;
+        });
+      });
+
+      // 2. Try to get media
       navigator.mediaDevices
         .getUserMedia({ video: true, audio: true })
         .then((stream) => {
@@ -101,85 +182,16 @@ export default function Room({ roomId }: { roomId: string }) {
             localVideoRef.current.srcObject = stream;
           }
 
-          // Socket Listeners
-          socket.on("connect", () => setIsConnected(true));
-          
-          socket.on("waiting-for-admin", () => {
-            setIsWaiting(true);
-          });
-          
-          socket.on("join-approved", () => {
-            console.log("Join approved, notifying room...");
-            setIsWaiting(false);
-            socket.emit("ready-to-connect", roomId, (session?.user as any).id, session?.user?.name);
-          });
-
-          socket.on("join-rejected", () => {
-            setIsWaiting(false);
-            setIsRejected(true);
-            stream.getTracks().forEach(t => t.stop());
-          });
-
-          socket.on("request-to-join", (user: WaitingUser) => {
-            setWaitingUsers((prev) => {
-              if (prev.find(u => u.userId === user.userId)) return prev;
-              return [...prev, user];
-            });
-            toast.info(`${user.userName} wants to join`);
-          });
-
-          socket.on("user-connected", async (userId: string, userName: string) => {
-            console.log("User connected:", userName);
-            setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
-            const pc = createPeerConnection(userId, stream, socket);
-            peersRef.current[userId] = pc;
-
-            try {
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
-            } catch (e) { console.error(e); }
-          });
-
-          // Emit join-room
-          socket.emit("join-room", roomId, (session?.user as any).id, session?.user?.name, adminStatus);
-
-          socket.on("offer", async (payload) => {
-            const pc = createPeerConnection(payload.caller, stream, socket);
-            peersRef.current[payload.caller] = pc;
-            try {
-              await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              socket.emit("answer", { target: payload.caller, caller: socket.id, sdp: answer });
-            } catch (e) { console.error(e); }
-          });
-
-          socket.on("answer", async (payload) => {
-            const pc = peersRef.current[payload.caller];
-            if (pc) await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-          });
-
-          socket.on("ice-candidate", async (incoming) => {
-            const pc = peersRef.current[incoming.caller];
-            if (pc && pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(incoming.candidate));
-          });
-
-          socket.on("user-disconnected", (userId: string) => {
-            if (peersRef.current[userId]) {
-              peersRef.current[userId].close();
-              delete peersRef.current[userId];
-            }
-            setRemoteStreams((prev) => {
-              const next = { ...prev };
-              delete next[userId];
-              return next;
-            });
-          });
+          // If we joined and others were already offering, we might need to renegotiate 
+          // but usually, simple offer/answer is fine if listeners were ready.
         })
         .catch((err) => {
-          setError("Failed to access camera. Please ensure permissions are granted.");
+          console.error("Media access error:", err);
+          setError("Could not access camera/mic.");
         });
+
+      // 3. Emit join-room
+      socket.emit("join-room", roomId, (session?.user as any).id, session?.user?.name, adminStatus);
     };
 
     checkAdminStatus();
