@@ -163,11 +163,17 @@ export default function Room({ roomId }: { roomId: string }) {
       });
 
       socket.on("user-disconnected", (userId: string) => {
+        console.log("User disconnected:", userId);
         if (peersRef.current[userId]) {
           peersRef.current[userId].close();
           delete peersRef.current[userId];
         }
         setRemoteStreams((prev) => {
+          const next = { ...prev };
+          delete next[userId];
+          return next;
+        });
+        setRemoteUserNames((prev) => {
           const next = { ...prev };
           delete next[userId];
           return next;
@@ -320,7 +326,7 @@ export default function Room({ roomId }: { roomId: string }) {
     );
   }
 
-  const participantCount = Object.keys(remoteStreams).length + 1;
+  const participantCount = Object.keys(remoteUserNames).length + 1;
 
   return (
     <div className="flex flex-col h-screen bg-neutral-900 text-white overflow-hidden">
@@ -347,10 +353,16 @@ export default function Room({ roomId }: { roomId: string }) {
           </div>
         </div>
 
-        {/* Remote Videos */}
-        {Object.entries(remoteStreams).map(([id, stream]) => (
+        {/* Remote Videos - Map over UserNames to show everyone even without video yet */}
+        {Object.keys(remoteUserNames).map((id) => (
           <div key={id} className="relative w-full h-full aspect-video bg-black rounded-xl overflow-hidden shadow-lg border border-neutral-800 flex items-center justify-center">
-            <VideoComponent stream={stream} />
+            {remoteStreams[id] ? (
+              <VideoComponent stream={remoteStreams[id]} />
+            ) : (
+              <div className="w-24 h-24 rounded-full bg-neutral-800 flex items-center justify-center text-3xl font-bold animate-pulse">
+                {remoteUserNames[id]?.charAt(0) || "U"}
+              </div>
+            )}
             <div className="absolute bottom-4 left-4 text-sm font-medium bg-black/60 px-3 py-1.5 rounded-md backdrop-blur-sm">
               {remoteUserNames[id] || "Participant"}
             </div>
