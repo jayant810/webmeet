@@ -42,8 +42,12 @@ io.on("connection", (socket) => {
       // Notify others already in the room
       socket.to(roomId).emit("user-connected", userId, userName);
       
+      // If there are users waiting, notify the newly joined admin immediately
       if (room.waitingUsers.size > 0) {
-        socket.emit("waiting-list", Array.from(room.waitingUsers.values()));
+        console.log(`[${new Date().toISOString()}] Sending waiting list to new admin`);
+        room.waitingUsers.forEach((user) => {
+          socket.emit("request-to-join", user);
+        });
       }
     } else {
       room.waitingUsers.set(userId, { socketId: socket.id, userId, userName });
