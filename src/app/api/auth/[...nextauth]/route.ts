@@ -18,7 +18,12 @@ export const authOptions = {
       }
       return session;
     },
+    async signIn({ user, account, profile }: any) {
+      console.log("Sign-in attempt:", user.email);
+      return true;
+    },
   },
+  debug: true,
   pages: {
     signIn: "/login",
   },

@@ -68,7 +68,7 @@ export default function Room({ roomId }: { roomId: string }) {
     let isMounted = true;
     const signalingServer = process.env.NEXT_PUBLIC_SIGNALING_SERVER || window.location.origin;
     const socket = io(signalingServer, {
-      path: signalingServer.includes("localhost") ? "/socket.io/" : undefined,
+      path: "/socket.io/",
       transports: ["websocket"]
     });
     socketRef.current = socket;
@@ -78,12 +78,9 @@ export default function Room({ roomId }: { roomId: string }) {
        try {
          const res = await fetch(`/api/meetings/${roomId}`);
          const data = await res.json();
-         if (data.adminId === (session?.user as any).id) {
-           setIsAdmin(true);
-           startMeeting(true);
-         } else {
-           startMeeting(false);
-         }
+         const isUserAdmin = data.adminId === (session?.user as any).id;
+         setIsAdmin(isUserAdmin);
+         startMeeting(isUserAdmin);
        } catch (e) {
          console.error("Error checking admin status", e);
          startMeeting(false);
@@ -104,15 +101,15 @@ export default function Room({ roomId }: { roomId: string }) {
             localVideoRef.current.srcObject = stream;
           }
 
-          // Emit join-room with admin status
-          socket.emit("join-room", roomId, (session?.user as any).id, session?.user?.name, adminStatus);
-
           // Socket Listeners
           socket.on("connect", () => setIsConnected(true));
           
-          socket.on("waiting-for-admin", () => setIsWaiting(true));
+          socket.on("waiting-for-admin", () => {
+            setIsWaiting(true);
+          });
           
           socket.on("join-approved", () => {
+            console.log("Join approved, notifying room...");
             setIsWaiting(false);
             socket.emit("ready-to-connect", roomId, (session?.user as any).id, session?.user?.name);
           });
@@ -120,19 +117,19 @@ export default function Room({ roomId }: { roomId: string }) {
           socket.on("join-rejected", () => {
             setIsWaiting(false);
             setIsRejected(true);
+            stream.getTracks().forEach(t => t.stop());
           });
 
           socket.on("request-to-join", (user: WaitingUser) => {
-            setWaitingUsers((prev) => [...prev, user]);
+            setWaitingUsers((prev) => {
+              if (prev.find(u => u.userId === user.userId)) return prev;
+              return [...prev, user];
+            });
             toast.info(`${user.userName} wants to join`);
           });
 
-          socket.on("waiting-list", (users: WaitingUser[]) => {
-            setWaitingUsers(users);
-          });
-
           socket.on("user-connected", async (userId: string, userName: string) => {
-            if (!userId) return;
+            console.log("User connected:", userName);
             setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
             const pc = createPeerConnection(userId, stream, socket);
             peersRef.current[userId] = pc;
@@ -143,6 +140,9 @@ export default function Room({ roomId }: { roomId: string }) {
               socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
             } catch (e) { console.error(e); }
           });
+
+          // Emit join-room
+          socket.emit("join-room", roomId, (session?.user as any).id, session?.user?.name, adminStatus);
 
           socket.on("offer", async (payload) => {
             const pc = createPeerConnection(payload.caller, stream, socket);

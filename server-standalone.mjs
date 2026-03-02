@@ -37,6 +37,9 @@ io.on("connection", (socket) => {
     if (isAdmin) {
       room.adminId = socket.id;
       socket.join(roomId);
+      console.log(`[${new Date().toISOString()}] Admin ${userName} joined and is ready.`);
+      
+      // Notify others already in the room
       socket.to(roomId).emit("user-connected", userId, userName);
       
       if (room.waitingUsers.size > 0) {
@@ -57,6 +60,13 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("user-disconnected", userId);
       room?.waitingUsers.delete(userId);
     });
+  });
+
+  socket.on("ready-to-connect", (roomId, userId, userName) => {
+    console.log(`[${new Date().toISOString()}] User ${userName} (${userId}) is approved and joining room: ${roomId}`);
+    socket.join(roomId);
+    // Broadcast to everyone ELSE in the room to start WebRTC
+    socket.to(roomId).emit("user-connected", userId, userName);
   });
 
   socket.on("approve-user", (roomId, userId) => {
