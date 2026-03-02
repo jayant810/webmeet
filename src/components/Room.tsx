@@ -105,7 +105,9 @@ export default function Room({ roomId }: { roomId: string }) {
       
       socket.on("join-approved", () => {
         setIsWaiting(false);
-        socket.emit("ready-to-connect", roomId, (session.user as any).id, session.user.name);
+        if (session?.user) {
+          socket.emit("ready-to-connect", roomId, (session.user as any).id, session.user.name);
+        }
       });
 
       socket.on("join-rejected", () => {
