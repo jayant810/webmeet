@@ -194,10 +194,24 @@ export default function Room({ roomId }: { roomId: string }) {
             return;
           }
 
+          console.log("Local stream started, syncing tracks to peers...");
           localStreamRef.current = stream;
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = stream;
           }
+
+          // If we already have peer connections (joined late or was approved quickly),
+          // we need to add our tracks to them now.
+          Object.values(peersRef.current).forEach(pc => {
+            stream.getTracks().forEach(track => {
+              const sender = pc.getSenders().find(s => s.track?.kind === track.kind);
+              if (!sender) {
+                pc.addTrack(track, stream);
+              } else {
+                sender.replaceTrack(track);
+              }
+            });
+          });
         })
         .catch((err) => {
           console.error("Media access error:", err);
