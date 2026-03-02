@@ -58,6 +58,8 @@ export default function Room({ roomId }: { roomId: string }) {
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
+      { urls: "stun:stun3.l.google.com:19302" },
+      { urls: "stun:stun4.l.google.com:19302" },
     ],
   };
 
@@ -73,7 +75,10 @@ export default function Room({ roomId }: { roomId: string }) {
     const signalingServer = process.env.NEXT_PUBLIC_SIGNALING_SERVER || window.location.origin;
     const socket = io(signalingServer, {
       path: "/socket.io/",
-      transports: ["websocket"]
+      transports: ["websocket"],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
     });
     socketRef.current = socket;
 

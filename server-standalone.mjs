@@ -61,10 +61,19 @@ io.on("connection", (socket) => {
 
     socket.on("disconnect", () => {
       console.log(`[${new Date().toISOString()}] User disconnected: ${socket.id}`);
-      if (socket.id === room?.adminId) room.adminId = null;
-      socket.to(roomId).emit("user-disconnected", userId);
-      room?.waitingUsers.delete(userId);
-      room?.participants.delete(userId);
+      
+      // Add a small grace period before removing the user
+      // This helps with tab switching and brief connection flickers
+      setTimeout(() => {
+        const currentSocket = io.sockets.sockets.get(socket.id);
+        if (!currentSocket || !currentSocket.connected) {
+          if (socket.id === room?.adminId) room.adminId = null;
+          socket.to(roomId).emit("user-disconnected", userId);
+          room?.waitingUsers.delete(userId);
+          room?.participants.delete(userId);
+          console.log(`[${new Date().toISOString()}] User ${userName} permanently removed from room ${roomId}`);
+        }
+      }, 5000); // 5 second grace period
     });
   });
 
