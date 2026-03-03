@@ -130,12 +130,28 @@ export default function Room({ roomId }: { roomId: string }) {
         console.log(`[Signaling] Connected as ${socket.id}`);
       });
 
+      socket.on("waiting-for-admin", () => {
+        console.log("[Signaling] Room exists but admin not present. Waiting...");
+        setIsWaiting(true);
+      });
+
       socket.on("join-approved", () => {
         console.log("[Signaling] APPROVED. Transitioning to room...");
         setIsWaiting(false);
         if (session?.user) {
           socket.emit("ready-to-connect", roomId, (session.user as any).id, session.user.name);
         }
+      });
+
+      socket.on("join-rejected", () => {
+        setIsWaiting(false);
+        setIsRejected(true);
+      });
+
+      socket.on("request-to-join", (user: WaitingUser) => {
+        console.log(`[Signaling] Admin: ${user.userName} wants to join.`);
+        setWaitingUsers(prev => prev.find(u => u.userId === user.userId) ? prev : [...prev, user]);
+        toast.info(`${user.userName} wants to join`);
       });
 
       socket.on("user-connected", async (userId: string, userName: string) => {
