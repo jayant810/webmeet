@@ -14,10 +14,14 @@ const httpServer = createServer((req, res) => {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      // Allow all origins for debugging on AWS, or add your duckdns domain
+      callback(null, true);
+    },
     methods: ["GET", "POST"],
     credentials: true
-  }
+  },
+  allowEIO3: true // Support older clients if any
 });
 
 const rooms = new Map(); // Map of roomId -> { adminId, waitingUsers: Map, participants: Map }
@@ -87,16 +91,18 @@ io.on("connection", (socket) => {
     // 1. Add to active participants
     room.participants.set(userId, { socketId: socket.id, userName });
 
-    // 2. Notify OTHERS that this user is now ready to receive offers
+    // 2. Notify OTHERS that this user is now ready. 
+    // They will be the ones to initiate the offer (Impolite peers).
     socket.to(roomId).emit("user-connected", userId, userName);
     
-    // 3. Notify THIS user about EVERYONE else already in the room
-    // so they can initiate connections to the admin and other participants
-    room.participants.forEach((data, otherUserId) => {
-      if (otherUserId !== userId) {
-        socket.emit("user-connected", otherUserId, data.userName);
-      }
-    });
+    // 3. Send the list of existing participants to THIS user
+    // But don't trigger 'user-connected' for them yet, 
+    // just let the new user know who is there so they can set names.
+    const existingUsers = Array.from(room.participants.entries())
+      .filter(([id]) => id !== userId)
+      .map(([id, data]) => ({ userId: id, userName: data.userName }));
+    
+    socket.emit("room-participants", existingUsers);
   });
 
   socket.on("approve-user", (roomId, userId) => {

@@ -57,14 +57,19 @@ export default function Room({ roomId }: { roomId: string }) {
     if (status !== "authenticated" || !session) return;
 
     let isMounted = true;
+    
+    // On AWS with DuckDNS, if the signaling server is on the same domain, 
+    // we don't need a separate URL. If it's on a different port (3001), we specify it.
     const signalingServer = process.env.NEXT_PUBLIC_SIGNALING_SERVER || window.location.origin;
     
-    // Improved socket config for mobile stability
+    console.log("Connecting to signaling server:", signalingServer);
+
     const socket = io(signalingServer, {
       path: "/socket.io/",
       transports: ["websocket", "polling"], 
       reconnection: true,
       reconnectionAttempts: 5,
+      withCredentials: true,
     });
     socketRef.current = socket;
 
@@ -86,21 +91,37 @@ export default function Room({ roomId }: { roomId: string }) {
       };
 
       pc.ontrack = (event) => {
-        console.log("Received remote track from:", userId);
+        console.log("Received remote track from:", userId, event.streams);
         if (event.streams && event.streams[0]) {
           setRemoteStreams(prev => ({ ...prev, [userId]: event.streams[0] }));
         }
       };
 
+      pc.onnegotiationneeded = async () => {
+        try {
+          console.log("Negotiation needed for:", userId);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
+        } catch (e) { console.error("Negotiation error:", e); }
+      };
+
       pc.onconnectionstatechange = () => {
         console.log(`Connection state with ${userId}: ${pc.connectionState}`);
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          // Cleanup if needed
+        }
       };
 
       return pc;
     };
 
     const startMeeting = (adminStatus: boolean) => {
-      socket.on("connect", () => setIsConnected(true));
+      socket.on("connect", () => {
+        setIsConnected(true);
+        console.log("Connected to signaling server:", signalingServer);
+      });
+
       socket.on("waiting-for-admin", () => setIsWaiting(true));
       
       socket.on("join-approved", () => {
@@ -120,24 +141,33 @@ export default function Room({ roomId }: { roomId: string }) {
         toast.info(`${user.userName} wants to join`);
       });
 
+      // Existing participants receive this when a NEW user joins
       socket.on("user-connected", async (userId: string, userName: string) => {
-        console.log("User ready to connect:", userName);
+        console.log("Existing user: new participant ready to connect:", userName);
         setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
         
+        // We are the "Impolite" peer - we initiate the offer
         const pc = createPeerConnection(userId, socket);
         peersRef.current[userId] = pc;
-        
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
-        } catch (e) { console.error("Offer error:", e); }
+      });
+
+      // New participants receive this with a list of everyone already there
+      socket.on("room-participants", (users: { userId: string, userName: string }[]) => {
+        console.log("Received existing participants:", users);
+        users.forEach(u => {
+          setRemoteUserNames(prev => ({ ...prev, [u.userId]: u.userName }));
+          // We don't create PC here; we wait for them to send us an offer
+        });
       });
 
       socket.on("offer", async (payload) => {
         console.log("Received offer from:", payload.caller);
-        const pc = createPeerConnection(payload.caller, socket);
-        peersRef.current[payload.caller] = pc;
+        // We are the "Polite" peer - we receive the offer and respond
+        let pc = peersRef.current[payload.caller];
+        if (!pc) {
+          pc = createPeerConnection(payload.caller, socket);
+          peersRef.current[payload.caller] = pc;
+        }
         
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
@@ -148,13 +178,14 @@ export default function Room({ roomId }: { roomId: string }) {
       });
 
       socket.on("answer", async (payload) => {
+        console.log("Received answer from:", payload.caller);
         const pc = peersRef.current[payload.caller];
         if (pc) await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
       });
 
       socket.on("ice-candidate", async (incoming) => {
         const pc = peersRef.current[incoming.caller];
-        if (pc && pc.remoteDescription) {
+        if (pc) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(incoming.candidate));
           } catch (e) { console.error("ICE error:", e); }
@@ -174,10 +205,12 @@ export default function Room({ roomId }: { roomId: string }) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then((stream) => {
           if (!isMounted) return;
+          console.log("Local stream acquired");
           localStreamRef.current = stream;
           if (localVideoRef.current) localVideoRef.current.srcObject = stream;
           
           // Add tracks to any ALREADY existing peer connections
+          // This will trigger onnegotiationneeded on those PCs
           Object.values(peersRef.current).forEach(pc => {
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
           });
@@ -185,6 +218,7 @@ export default function Room({ roomId }: { roomId: string }) {
         .catch(err => {
           console.error("Media error:", err);
           setError("Camera blocked or in use. You can still join.");
+          toast.error("Could not access camera/microphone");
         });
 
       if (session?.user) {
