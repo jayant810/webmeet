@@ -74,43 +74,52 @@ export default function Room({ roomId }: { roomId: string }) {
     socketRef.current = socket;
 
     const createPeerConnection = (userId: string, socket: Socket) => {
-      console.log("Creating peer connection for:", userId);
+      console.log(`[WebRTC] Creating PeerConnection for user: ${userId}`);
       const pc = new RTCPeerConnection(iceServers);
       
-      // Add existing local tracks if available
       if (localStreamRef.current) {
+        console.log(`[WebRTC] Adding ${localStreamRef.current.getTracks().length} local tracks to PC for ${userId}`);
         localStreamRef.current.getTracks().forEach(track => {
           pc.addTrack(track, localStreamRef.current!);
         });
+      } else {
+        console.warn(`[WebRTC] No local stream available yet when creating PC for ${userId}`);
       }
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log(`[WebRTC] Generated ICE candidate for ${userId}`);
           socket.emit("ice-candidate", { target: userId, caller: socket.id, candidate: event.candidate });
         }
       };
 
       pc.ontrack = (event) => {
-        console.log("Received remote track from:", userId, event.streams);
+        console.log(`[WebRTC] ONTRACK: Received remote track from ${userId}. Stream count: ${event.streams.length}`);
         if (event.streams && event.streams[0]) {
-          setRemoteStreams(prev => ({ ...prev, [userId]: event.streams[0] }));
+          setRemoteStreams(prev => {
+            console.log(`[WebRTC] Updating remote stream for ${userId}`);
+            return { ...prev, [userId]: event.streams[0] };
+          });
         }
       };
 
       pc.onnegotiationneeded = async () => {
         try {
-          console.log("Negotiation needed for:", userId);
+          console.log(`[WebRTC] Negotiation needed for ${userId}. Signaling state: ${pc.signalingState}`);
+          if (pc.signalingState !== "stable") return;
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
+          console.log(`[WebRTC] Sending offer to ${userId}`);
           socket.emit("offer", { target: userId, caller: socket.id, sdp: offer });
-        } catch (e) { console.error("Negotiation error:", e); }
+        } catch (e) { console.error(`[WebRTC] Negotiation error for ${userId}:`, e); }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log(`[WebRTC] ICE Connection State with ${userId}: ${pc.iceConnectionState}`);
       };
 
       pc.onconnectionstatechange = () => {
-        console.log(`Connection state with ${userId}: ${pc.connectionState}`);
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          // Cleanup if needed
-        }
+        console.log(`[WebRTC] Connection State with ${userId}: ${pc.connectionState}`);
       };
 
       return pc;
@@ -119,76 +128,81 @@ export default function Room({ roomId }: { roomId: string }) {
     const startMeeting = (adminStatus: boolean) => {
       socket.on("connect", () => {
         setIsConnected(true);
-        console.log("Connected to signaling server:", signalingServer);
+        console.log(`[Signaling] Connected to server: ${signalingServer} with ID: ${socket.id}`);
       });
 
-      socket.on("waiting-for-admin", () => setIsWaiting(true));
+      socket.on("waiting-for-admin", () => {
+        console.log("[Signaling] Room exists but admin not present. Waiting...");
+        setIsWaiting(true);
+      });
       
       socket.on("join-approved", () => {
+        console.log("[Signaling] Join approved by admin. Ready to connect.");
         setIsWaiting(false);
         if (session?.user) {
           socket.emit("ready-to-connect", roomId, (session.user as any).id, session.user.name);
         }
       });
 
-      socket.on("join-rejected", () => {
-        setIsWaiting(false);
-        setIsRejected(true);
-      });
-
       socket.on("request-to-join", (user: WaitingUser) => {
+        console.log(`[Signaling] Admin: ${user.userName} wants to join.`);
         setWaitingUsers(prev => prev.find(u => u.userId === user.userId) ? prev : [...prev, user]);
         toast.info(`${user.userName} wants to join`);
       });
 
-      // Existing participants receive this when a NEW user joins
       socket.on("user-connected", async (userId: string, userName: string) => {
-        console.log("Existing user: new participant ready to connect:", userName);
+        console.log(`[Signaling] User ready to connect: ${userName} (${userId})`);
         setRemoteUserNames(prev => ({ ...prev, [userId]: userName }));
         
-        // We are the "Impolite" peer - we initiate the offer
         const pc = createPeerConnection(userId, socket);
         peersRef.current[userId] = pc;
       });
 
-      // New participants receive this with a list of everyone already there
       socket.on("room-participants", (users: { userId: string, userName: string }[]) => {
-        console.log("Received existing participants:", users);
+        console.log(`[Signaling] Received existing room participants: ${users.length}`);
         users.forEach(u => {
+          console.log(`[Signaling] Adding participant: ${u.userName}`);
           setRemoteUserNames(prev => ({ ...prev, [u.userId]: u.userName }));
-          // We don't create PC here; we wait for them to send us an offer
         });
       });
 
       socket.on("offer", async (payload) => {
-        console.log("Received offer from:", payload.caller);
-        // We are the "Polite" peer - we receive the offer and respond
+        console.log(`[Signaling] Received offer from ${payload.caller}`);
         let pc = peersRef.current[payload.caller];
         if (!pc) {
+          console.log(`[Signaling] PC not found for offerer ${payload.caller}. Creating now.`);
           pc = createPeerConnection(payload.caller, socket);
           peersRef.current[payload.caller] = pc;
         }
         
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          console.log(`[WebRTC] Remote description set for ${payload.caller}`);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
+          console.log(`[WebRTC] Sending answer to ${payload.caller}`);
           socket.emit("answer", { target: payload.caller, caller: socket.id, sdp: answer });
-        } catch (e) { console.error("Answer error:", e); }
+        } catch (e) { console.error(`[WebRTC] Answer error for ${payload.caller}:`, e); }
       });
 
       socket.on("answer", async (payload) => {
-        console.log("Received answer from:", payload.caller);
+        console.log(`[Signaling] Received answer from ${payload.caller}`);
         const pc = peersRef.current[payload.caller];
-        if (pc) await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          console.log(`[WebRTC] Final remote description set for ${payload.caller}. Connection should establish.`);
+        } else {
+          console.error(`[Signaling] Received answer from ${payload.caller} but no PC exists!`);
+        }
       });
 
       socket.on("ice-candidate", async (incoming) => {
         const pc = peersRef.current[incoming.caller];
         if (pc) {
           try {
+            console.log(`[WebRTC] Adding ICE candidate from ${incoming.caller}`);
             await pc.addIceCandidate(new RTCIceCandidate(incoming.candidate));
-          } catch (e) { console.error("ICE error:", e); }
+          } catch (e) { console.error("[WebRTC] ICE candidate error:", e); }
         }
       });
 
