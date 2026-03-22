@@ -55,12 +55,13 @@ model VerificationToken {
 }
 
 model Meeting {
-  id        String   @id @default(uuid())
-  title     String?
-  createdAt DateTime @default(now())
-  adminId   String
-  admin     User     @relation("AdminOf", fields: [adminId], references: [id])
-  participants Participant[]
+  id            String   @id @default(uuid())
+  title         String?
+  createdAt     DateTime @default(now())
+  adminId       String
+  admin         User     @relation("AdminOf", fields: [adminId], references: [id])
+  participants  Participant[]
+  invitedEmails String[] @default([])
 }
 
 model Participant {

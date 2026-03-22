@@ -5,7 +5,6 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const port = process.env.PORT || 3001;
-const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : "*";
 
 const httpServer = createServer((req, res) => {
   res.writeHead(200);
@@ -14,93 +13,80 @@ const httpServer = createServer((req, res) => {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: (origin, callback) => {
-      // Allow all origins for debugging on AWS, or add your duckdns domain
-      callback(null, true);
-    },
+    origin: "*",
     methods: ["GET", "POST"],
     credentials: true
   },
-  allowEIO3: true // Support older clients if any
+  pingTimeout: 120000,
+  pingInterval: 25000,
+  connectTimeout: 45000
 });
 
-const rooms = new Map(); // Map of roomId -> { adminId, waitingUsers: Map, participants: Map }
+const rooms = new Map(); // roomId -> { adminId, waitingUsers: Map, participants: Map }
+const userIdToSocketId = new Map(); 
+const socketIdToUserId = new Map(); 
 
 io.on("connection", (socket) => {
-  console.log(`[${new Date().toISOString()}] User connected: ${socket.id}`);
+  console.log(`[Socket] Connected: ${socket.id}`);
 
-  socket.on("join-room", (roomId, userId, userName, isAdmin = false) => {
-    console.log(`[${new Date().toISOString()}] User ${userName} (${userId}) joining room: ${roomId} (Admin: ${isAdmin})`);
+  socket.on("join-room", (roomId, userId, userName, isAdmin = false, isPreAuthorized = false, userImage = null) => {
+    console.log(`[Join] ${userName} (${userId}) requesting access to ${roomId}`);
     
+    userIdToSocketId.set(userId, socket.id);
+    socketIdToUserId.set(socket.id, userId);
+
     if (!rooms.has(roomId)) {
       rooms.set(roomId, { adminId: null, waitingUsers: new Map(), participants: new Map() });
     }
     
     const room = rooms.get(roomId);
     
-    if (isAdmin) {
-      room.adminId = socket.id;
-      room.participants.set(userId, { socketId: socket.id, userName });
+    if (isAdmin || isPreAuthorized) {
+      if (isAdmin) room.adminId = socket.id;
+      room.participants.set(userId, { socketId: socket.id, userName, userImage });
       socket.join(roomId);
-      console.log(`[${new Date().toISOString()}] Admin ${userName} joined and is ready.`);
+      socket.emit("join-approved");
       
-      // Notify others already in the room
-      socket.to(roomId).emit("user-connected", userId, userName);
-      
-      // If there are users waiting, notify the newly joined admin immediately
-      if (room.waitingUsers.size > 0) {
-        console.log(`[${new Date().toISOString()}] Sending waiting list to new admin`);
-        room.waitingUsers.forEach((user) => {
-          socket.emit("request-to-join", user);
-        });
+      if (isAdmin && room.waitingUsers.size > 0) {
+        room.waitingUsers.forEach((user) => socket.emit("request-to-join", user));
       }
     } else {
-      room.waitingUsers.set(userId, { socketId: socket.id, userId, userName });
+      room.waitingUsers.set(userId, { socketId: socket.id, userId, userName, userImage });
       if (room.adminId) {
-        io.to(room.adminId).emit("request-to-join", { userId, userName });
+        io.to(room.adminId).emit("request-to-join", { userId, userName, userImage });
       } else {
         socket.emit("waiting-for-admin");
       }
     }
 
     socket.on("disconnect", () => {
-      console.log(`[${new Date().toISOString()}] User disconnected: ${socket.id}`);
-      
-      // Add a small grace period before removing the user
-      // This helps with tab switching and brief connection flickers
       setTimeout(() => {
-        const currentSocket = io.sockets.sockets.get(socket.id);
-        if (!currentSocket || !currentSocket.connected) {
-          if (socket.id === room?.adminId) room.adminId = null;
+        const currentSocketForUser = userIdToSocketId.get(userId);
+        if (currentSocketForUser === socket.id) {
+          if (room && room.adminId === socket.id) room.adminId = null;
+          if (room) {
+            room.participants.delete(userId);
+            room.waitingUsers.delete(userId);
+          }
+          userIdToSocketId.delete(userId);
+          socketIdToUserId.delete(socket.id);
           socket.to(roomId).emit("user-disconnected", userId);
-          room?.waitingUsers.delete(userId);
-          room?.participants.delete(userId);
-          console.log(`[${new Date().toISOString()}] User ${userName} permanently removed from room ${roomId}`);
         }
-      }, 5000); // 5 second grace period
+      }, 10000);
     });
   });
 
-  socket.on("ready-to-connect", (roomId, userId, userName) => {
+  socket.on("ready-to-connect", (roomId, userId, userName, userImage = null) => {
     const room = rooms.get(roomId);
     if (!room) return;
-
-    console.log(`[${new Date().toISOString()}] User ${userName} (${userId}) is approved and joining room: ${roomId}`);
     socket.join(roomId);
+    room.participants.set(userId, { socketId: socket.id, userName, userImage });
     
-    // 1. Add to active participants
-    room.participants.set(userId, { socketId: socket.id, userName });
-
-    // 2. Notify OTHERS that this user is now ready. 
-    // They will be the ones to initiate the offer (Impolite peers).
-    socket.to(roomId).emit("user-connected", userId, userName);
+    socket.to(roomId).emit("user-connected", userId, userName, userImage);
     
-    // 3. Send the list of existing participants to THIS user
-    // But don't trigger 'user-connected' for them yet, 
-    // just let the new user know who is there so they can set names.
     const existingUsers = Array.from(room.participants.entries())
       .filter(([id]) => id !== userId)
-      .map(([id, data]) => ({ userId: id, userName: data.userName }));
+      .map(([id, data]) => ({ userId: id, userName: data.userName, userImage: data.userImage }));
     
     socket.emit("room-participants", existingUsers);
   });
@@ -109,7 +95,6 @@ io.on("connection", (socket) => {
     const room = rooms.get(roomId);
     const user = room?.waitingUsers.get(userId);
     if (user) {
-      console.log(`[${new Date().toISOString()}] Approving user ${userId} in room ${roomId}`);
       io.to(user.socketId).emit("join-approved");
       room.waitingUsers.delete(userId);
     }
@@ -119,18 +104,53 @@ io.on("connection", (socket) => {
     const room = rooms.get(roomId);
     const user = room?.waitingUsers.get(userId);
     if (user) {
-      console.log(`[${new Date().toISOString()}] Rejecting user ${userId} in room ${roomId}`);
       io.to(user.socketId).emit("join-rejected");
       room.waitingUsers.delete(userId);
     }
   });
 
-  socket.on("offer", (payload) => io.to(payload.target).emit("offer", payload));
-  socket.on("answer", (payload) => io.to(payload.target).emit("answer", payload));
-  socket.on("ice-candidate", (incoming) => io.to(incoming.target).emit("ice-candidate", incoming));
+  socket.on("offer", (payload) => {
+    const targetSocketId = userIdToSocketId.get(payload.target);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("offer", { ...payload, caller: socketIdToUserId.get(socket.id) });
+    }
+  });
+
+  socket.on("answer", (payload) => {
+    const targetSocketId = userIdToSocketId.get(payload.target);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("answer", { ...payload, caller: socketIdToUserId.get(socket.id) });
+    }
+  });
+
+  socket.on("ice-candidate", (payload) => {
+    const targetSocketId = userIdToSocketId.get(payload.target);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("ice-candidate", { ...payload, caller: socketIdToUserId.get(socket.id) });
+    }
+  });
+
+  socket.on("toggle-mute", (roomId, userId, isMuted) => {
+    socket.to(roomId).emit("user-mute-status", { userId, isMuted });
+  });
+
+  socket.on("toggle-hand", (roomId, userId, isRaised) => {
+    socket.to(roomId).emit("user-hand-status", { userId, isRaised });
+  });
+
+  socket.on("toggle-video", (roomId, userId, isVideoOff) => {
+    socket.to(roomId).emit("user-video-status", { userId, isVideoOff });
+  });
+
+  socket.on("toggle-screen-share", (roomId, userId, isSharing, streamId) => {
+    socket.to(roomId).emit("user-screen-share-status", { userId, isSharing, streamId });
+  });
+
+  socket.on("chat-message", (roomId, message) => {
+    socket.to(roomId).emit("chat-message", message);
+  });
 });
 
 httpServer.listen(port, "0.0.0.0", () => {
   console.log(`> Signaling Server ready on port ${port}`);
-  console.log(`> Allowed Origins: ${allowedOrigins}`);
 });
