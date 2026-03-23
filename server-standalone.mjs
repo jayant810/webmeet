@@ -41,17 +41,28 @@ io.on("connection", (socket) => {
     
     const room = rooms.get(roomId);
     
-    if (isAdmin || isPreAuthorized) {
-      if (isAdmin) room.adminId = socket.id;
+    if (isAdmin) {
+      // Host joins — approve immediately, then auto-approve all waiting users
+      room.adminId = socket.id;
       room.participants.set(userId, { socketId: socket.id, userName, userImage });
       socket.join(roomId);
       socket.emit("join-approved");
       
-      if (isAdmin && room.waitingUsers.size > 0) {
-        room.waitingUsers.forEach((user) => socket.emit("request-to-join", user));
+      // Auto-approve all waiting (pre-authorized) users
+      if (room.waitingUsers.size > 0) {
+        room.waitingUsers.forEach((user) => {
+          io.to(user.socketId).emit("join-approved");
+        });
+        room.waitingUsers.clear();
       }
+    } else if (isPreAuthorized && room.adminId) {
+      // Pre-authorized user AND host is present — auto-approve
+      room.participants.set(userId, { socketId: socket.id, userName, userImage });
+      socket.join(roomId);
+      socket.emit("join-approved");
     } else {
-      room.waitingUsers.set(userId, { socketId: socket.id, userId, userName, userImage });
+      // No host yet, or not pre-authorized — wait
+      room.waitingUsers.set(userId, { socketId: socket.id, userId, userName, userImage, isPreAuthorized });
       if (room.adminId) {
         io.to(room.adminId).emit("request-to-join", { userId, userName, userImage });
       } else {
