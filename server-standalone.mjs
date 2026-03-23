@@ -85,7 +85,9 @@ io.on("connection", (socket) => {
       if (room && room.adminId === socket.id) {
         // Teacher disconnected
         room.adminId = null;
+        room.participants.delete(userId); // <--- BOOM! Ghost Admin Fix!
         socket.to(roomId).emit("user-disconnected", userId);
+        console.log(`[Disconnect] Host ${userId} disconnected from ${roomId}`);
         
         if (!room.isResumedWithoutHost) {
           // 5 minute warning: Kick students back to waiting room
