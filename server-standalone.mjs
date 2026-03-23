@@ -116,12 +116,18 @@ io.on("connection", (socket) => {
       userIdToSocketId.delete(userId);
       socketIdToUserId.delete(socket.id);
 
-      // If room is completely empty (no students, no host), kill bot if any
-      if (room && room.participants.size === 0 && room.waitingUsers.size === 0) {
-        if (room.botProcess) {
-          io.to(roomId).emit("room-ended"); // Gracefully tell bot to save the Cloudinary video
-        } else {
-          rooms.delete(roomId);
+      // If room is completely empty of humans, tell bot to save recording
+      if (room) {
+        let humanCount = 0;
+        room.participants.forEach((_, id) => { if (!id.startsWith("recorder-bot-")) humanCount++; });
+        room.waitingUsers.forEach((_, id) => { if (!id.startsWith("recorder-bot-")) humanCount++; });
+        
+        if (humanCount === 0) {
+          if (room.botProcess) {
+            io.to(roomId).emit("room-ended"); // Gracefully tell bot to save the Cloudinary video
+          } else {
+            rooms.delete(roomId);
+          }
         }
       }
     });
