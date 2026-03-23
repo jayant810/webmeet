@@ -111,6 +111,7 @@ io.on("connection", (socket) => {
         room.participants.delete(userId);
         room.waitingUsers.delete(userId);
         socket.to(roomId).emit("user-disconnected", userId);
+        console.log(`[Disconnect] Student ${userId} disconnected from ${roomId}`);
       }
 
       userIdToSocketId.delete(userId);
@@ -122,10 +123,13 @@ io.on("connection", (socket) => {
         room.participants.forEach((_, id) => { if (!id.startsWith("recorder-bot-")) humanCount++; });
         room.waitingUsers.forEach((_, id) => { if (!id.startsWith("recorder-bot-")) humanCount++; });
         
+        console.log(`[Room] ${roomId} has ${humanCount} humans left.`);
         if (humanCount === 0) {
           if (room.botProcess) {
+            console.log(`[Room] ${roomId} is empty of humans! Triggering Bot shutdown...`);
             io.to(roomId).emit("room-ended"); // Gracefully tell bot to save the Cloudinary video
           } else {
+            console.log(`[Room] ${roomId} is completely empty. Deleting room.`);
             rooms.delete(roomId);
           }
         }
