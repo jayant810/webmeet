@@ -209,7 +209,7 @@ io.on("connection", (socket) => {
       
       const botProcess = spawn('node', ['record-bot.mjs', roomId, adminToken], {
         detached: true,
-        stdio: 'ignore'
+        stdio: 'inherit'
       });
       botProcess.unref();
       room.botProcess = botProcess;
