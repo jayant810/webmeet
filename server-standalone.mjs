@@ -149,6 +149,57 @@ io.on("connection", (socket) => {
   socket.on("chat-message", (roomId, message) => {
     socket.to(roomId).emit("chat-message", message);
   });
+
+  // ─── Moderation: Force-end entire room (admin terminates) ───
+  socket.on("force-end-room", (roomId) => {
+    io.to(roomId).emit("room-ended");
+    const room = rooms.get(roomId);
+    if (room) {
+      room.participants.forEach((_, userId) => {
+        userIdToSocketId.delete(userId);
+      });
+      room.waitingUsers.forEach((_, userId) => {
+        userIdToSocketId.delete(userId);
+      });
+      rooms.delete(roomId);
+    }
+    console.log(`[Room] Force-ended: ${roomId}`);
+  });
+
+  // ─── Moderation: Kick a specific user ───
+  socket.on("kick-user", (roomId, targetUserId) => {
+    const targetSocketId = userIdToSocketId.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("you-were-kicked");
+      const room = rooms.get(roomId);
+      if (room) {
+        room.participants.delete(targetUserId);
+      }
+      // Tell others they left
+      socket.to(roomId).emit("user-disconnected", targetUserId);
+      console.log(`[Kick] ${targetUserId} kicked from ${roomId}`);
+    }
+  });
+
+  // ─── Moderation: Force-mute a user's mic ───
+  socket.on("force-mute-user", (roomId, targetUserId) => {
+    const targetSocketId = userIdToSocketId.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("force-muted");
+      // Broadcast new mute state to everyone
+      socket.to(roomId).emit("user-mute-status", { userId: targetUserId, isMuted: true });
+    }
+  });
+
+  // ─── Moderation: Force turn off a user's camera ───
+  socket.on("force-video-off-user", (roomId, targetUserId) => {
+    const targetSocketId = userIdToSocketId.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("force-video-off");
+      // Broadcast new video state to everyone
+      socket.to(roomId).emit("user-video-status", { userId: targetUserId, isVideoOff: true });
+    }
+  });
 });
 
 httpServer.listen(port, "0.0.0.0", () => {
