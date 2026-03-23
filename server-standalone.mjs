@@ -146,6 +146,16 @@ io.on("connection", (socket) => {
       .map(([id, data]) => ({ userId: id, userName: data.userName, userImage: data.userImage }));
     
     socket.emit("room-participants", existingUsers);
+
+    // RACE CONDITION FIX: If the bot just connected but the room is already empty of humans, kill it instantly!
+    if (userId.startsWith("recorder-bot-")) {
+      let humanCount = 0;
+      room.participants.forEach((_, id) => { if (!id.startsWith("recorder-bot-")) humanCount++; });
+      room.waitingUsers.forEach((_, id) => { if (!id.startsWith("recorder-bot-")) humanCount++; });
+      if (humanCount === 0) {
+        io.to(roomId).emit("room-ended"); // Auto-shutdown
+      }
+    }
   });
 
   socket.on("approve-user", (roomId, userId) => {
