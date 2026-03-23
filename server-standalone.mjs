@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 import dotenv from "dotenv";
+import { spawn } from "node:child_process";
 
 dotenv.config();
 
@@ -70,20 +71,58 @@ io.on("connection", (socket) => {
       }
     }
 
+    if (isAdmin && room.hostTimers) {
+      clearTimeout(room.hostTimers.fiveMin);
+      clearTimeout(room.hostTimers.tenMin);
+      room.hostTimers = null;
+      room.adminMissingSince = null;
+    }
+
     socket.on("disconnect", () => {
-      setTimeout(() => {
-        const currentSocketForUser = userIdToSocketId.get(userId);
-        if (currentSocketForUser === socket.id) {
-          if (room && room.adminId === socket.id) room.adminId = null;
-          if (room) {
-            room.participants.delete(userId);
-            room.waitingUsers.delete(userId);
-          }
-          userIdToSocketId.delete(userId);
-          socketIdToUserId.delete(socket.id);
-          socket.to(roomId).emit("user-disconnected", userId);
+      const currentSocketForUser = userIdToSocketId.get(userId);
+      if (currentSocketForUser !== socket.id) return; // Prevent old socket disconnects from breaking reconnects
+
+      if (room && room.adminId === socket.id) {
+        // Teacher disconnected
+        room.adminId = null;
+        socket.to(roomId).emit("user-disconnected", userId);
+        
+        if (!room.isResumedWithoutHost) {
+          // 5 minute warning: Kick students back to waiting room
+          const fiveMin = setTimeout(() => {
+            room.adminMissingSince = Date.now();
+            io.to(roomId).emit("waiting-for-admin");
+          }, 5 * 60 * 1000); // 5 minutes
+          
+          // 10 minute force kill
+          const tenMin = setTimeout(() => {
+            io.to(roomId).emit("room-ended");
+            if (rooms.has(roomId)) {
+              rooms.get(roomId).participants.forEach((_, uId) => userIdToSocketId.delete(uId));
+              rooms.get(roomId).waitingUsers.forEach((_, uId) => userIdToSocketId.delete(uId));
+              rooms.delete(roomId);
+            }
+          }, 10 * 60 * 1000); // 10 minutes
+
+          room.hostTimers = { fiveMin, tenMin };
         }
-      }, 10000);
+      } else if (room) {
+        // Student disconnected (Immediate removal)
+        room.participants.delete(userId);
+        room.waitingUsers.delete(userId);
+        socket.to(roomId).emit("user-disconnected", userId);
+      }
+
+      userIdToSocketId.delete(userId);
+      socketIdToUserId.delete(socket.id);
+
+      // If room is completely empty (no students, no host), kill bot if any
+      if (room && room.participants.size === 0 && room.waitingUsers.size === 0) {
+        if (room.botProcess) {
+          try { process.kill(room.botProcess.pid); } catch(e) {}
+        }
+        rooms.delete(roomId);
+      }
     });
   });
 
@@ -159,6 +198,22 @@ io.on("connection", (socket) => {
 
   socket.on("chat-message", (roomId, message) => {
     socket.to(roomId).emit("chat-message", message);
+  });
+
+  // ─── Moderation: Resume for students (Teacher Leaves but keeps open) ───
+  socket.on("resume-for-students", (roomId, adminToken) => {
+    const room = rooms.get(roomId);
+    if (room && room.adminId === socket.id) {
+      room.isResumedWithoutHost = true;
+      console.log(`[Room] ${roomId} resumed without host. Launching Bot...`);
+      
+      const botProcess = spawn('node', ['record-bot.mjs', roomId, adminToken], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      botProcess.unref();
+      room.botProcess = botProcess;
+    }
   });
 
   // ─── Moderation: Force-end entire room (admin terminates) ───
