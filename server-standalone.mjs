@@ -119,9 +119,10 @@ io.on("connection", (socket) => {
       // If room is completely empty (no students, no host), kill bot if any
       if (room && room.participants.size === 0 && room.waitingUsers.size === 0) {
         if (room.botProcess) {
-          try { process.kill(room.botProcess.pid); } catch(e) {}
+          io.to(roomId).emit("room-ended"); // Gracefully tell bot to save the Cloudinary video
+        } else {
+          rooms.delete(roomId);
         }
-        rooms.delete(roomId);
       }
     });
   });
