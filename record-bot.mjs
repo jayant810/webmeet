@@ -1,4 +1,7 @@
 import puppeteer from 'puppeteer';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const roomId = process.argv[2];
 const adminToken = process.argv[3] || "";
